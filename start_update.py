@@ -48,6 +48,13 @@ indexType = {
     1: "ADD INDEX"
 }
 
+def write_exec_sql(sqlL):
+    fileRef = open('exec.sql', 'w+', encoding='utf8')
+    for sql in sqlL:
+        fileRef.write(sql + "\n")
+    fileRef.flush()
+    fileRef.close()
+
 
 def exec_sql(conn, cursor, sqlL):
     for sql in sqlL:
@@ -90,7 +97,8 @@ def StartCompare(a_func):
         OldTableObjDir = GenerateTabObj(Oldcursor)
         SqlL = a_func(NewTableObjDir, OldTableObjDir)
         print(SqlL)
-        exec_sql(Oldconn, Oldcursor, SqlL)
+        # exec_sql(Oldconn, Oldcursor, SqlL)
+        write_exec_sql(SqlL)
         close_connect_mysql(Newconn, Newcursor)
         close_connect_mysql(Oldconn, Oldcursor)
         return
@@ -228,7 +236,7 @@ class DbTableField:  # todo 缺少是否自增
     # 创建语句
     # ADD COLUMN `value5` varchar(255) NOT NULL COMMENT '156415' AFTER `value3`;
     def CREAT_FIELD(self):
-        return "ALTER TABLE `{0}`  ADD COLUMN `{1}` {2} {3} {4} {5};".format(self.tableName, self.fieldName, self.fieldType, self.IsNull(), self.EXTRA, self.COMMENT_INFO, self.getLastField())
+        return "ALTER TABLE `{0}`  ADD COLUMN `{1}` {2} {3} {4} {5} {6};".format(self.tableName, self.fieldName, self.fieldType, self.IsNull(), self.EXTRA, self.COMMENT_INFO, self.getLastField())
 
     # 生成更新语句
     # MODIFY COLUMN `value4` int(10) NOT NULL AUTO_INCREMENT COMMENT '123456' AFTER `value1`,
