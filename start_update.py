@@ -77,6 +77,8 @@ def executeScriptsFromFile(filename, cursor):
 def update_new_sql(Cursor):
     List = os.listdir(sqlDir)
     for fileName in List:
+        if fileName == '.svn':
+            continue
         tmpPath = os.path.join(sqlDir, fileName)
         if os.path.isfile(tmpPath) and fileName.endswith('.sql'):
             executeScriptsFromFile(tmpPath, Cursor)
@@ -116,7 +118,7 @@ def handle_select_tableInfo(cursor, dbName, tableName):
     sql = "SHOW CREATE TABLE {0};".format(tableName)
     cursor.execute(sql)
     creatSqlL = list(cursor.fetchall())
-    return DbTable(tableName, fieldL, indexL, creatSqlL[0][1])
+    return DbTable(tableName, fieldL, indexL, creatSqlL[0][1]+";")
 
 
 def GenerateTabObj(Cursor):
