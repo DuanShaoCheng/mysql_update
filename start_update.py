@@ -1,60 +1,34 @@
 # -*- coding:utf-8 -*-
-from time import sleep
 import pymysql
-from functools import wraps
 import os
-# import urllib . request
-# import chardet
+import yaml
 
-import configparser
-
-## 配置文件名称
-configFileName = "config.ini"
+config_path = './config.yml'
 
 
-config = configparser.ConfigParser()
-config.read(configFileName)
-
-mysqlConnectInfo = {
-    "host": config["mysql_connect"]["host"],
-    "user": config["mysql_connect"]["user"],
-    "port": config["mysql_connect"].getint('port'),
-    "password": config["mysql_connect"]["password"],
-    # "database": "test_db",
-    "charset": config["mysql_connect"]["charset"]
-}
-
-OldDatabaseName = config["mysql_connect"]["dbName"]
-NewDatabaseName = OldDatabaseName+"_new"
-
-sqlDir = config["other_config"]["sqlDir"]
-
-
-def start_connect_mysql(DataBase):
-    if DataBase != None:
-        conn = pymysql.connect(database=DataBase, **mysqlConnectInfo)
-    else:
-        conn = pymysql.connect(**mysqlConnectInfo)
+def start_connect_mysql(DataBase, mysqlConnectInfo):
+    conn = pymysql.connect(database=DataBase, **mysqlConnectInfo)
     return conn, conn.cursor()
-
 
 def close_connect_mysql(conn, cursor):
     cursor.close()
     conn.close()
-
 
 indexType = {
     0: "ADD UNIQUE INDEX",
     1: "ADD INDEX"
 }
 
-def write_exec_sql(sqlL):
-    fileRef = open('exec.sql', 'w+', encoding='utf8')
+def get_sql_file_name(databaseName):
+    return databaseName + ".sql"
+
+def write_exec_sql(databasesName, sqlL):
+    fileRef = open(get_sql_file_name(databasesName), 'w+', encoding='utf8')
+    fileRef.write("use {0};\n".format(databasesName))
     for sql in sqlL:
         fileRef.write(sql + "\n")
     fileRef.flush()
     fileRef.close()
-
 
 def exec_sql(conn, cursor, sqlL):
     for sql in sqlL:
@@ -74,7 +48,7 @@ def executeScriptsFromFile(filename, cursor):
             print(msg)
 
 
-def update_new_sql(Cursor):
+def update_new_sql(Cursor, sqlDir):
     List = os.listdir(sqlDir)
     for fileName in List:
         if fileName == '.svn':
@@ -82,30 +56,6 @@ def update_new_sql(Cursor):
         tmpPath = os.path.join(sqlDir, fileName)
         if os.path.isfile(tmpPath) and fileName.endswith('.sql'):
             executeScriptsFromFile(tmpPath, Cursor)
-
-
-def StartCompare(a_func):
-    @wraps(a_func)
-    def wrapCompare(*args, **kwargs):
-        Newconn, Newcursor = start_connect_mysql(None)
-        sql = "DROP DATABASE IF EXISTS {0};".format(NewDatabaseName)
-        Newcursor.execute(sql)
-        sql = "CREATE DATABASE if not exists {0} DEFAULT CHARACTER SET {1} COLLATE {1}_bin;".format(NewDatabaseName, mysqlConnectInfo["charset"])
-        Newcursor.execute(sql)
-        Newcursor.execute("use {0};".format(NewDatabaseName))
-        update_new_sql(Newcursor)
-        Oldconn, Oldcursor = start_connect_mysql(OldDatabaseName)
-        NewTableObjDir = GenerateTabObj(Newcursor)
-        OldTableObjDir = GenerateTabObj(Oldcursor)
-        SqlL = a_func(NewTableObjDir, OldTableObjDir)
-        print(SqlL)
-        # exec_sql(Oldconn, Oldcursor, SqlL)
-        write_exec_sql(SqlL)
-        close_connect_mysql(Newconn, Newcursor)
-        close_connect_mysql(Oldconn, Oldcursor)
-        return
-    return wrapCompare
-
 
 def handle_select_tableInfo(cursor, dbName, tableName):
     sql = "SHOW INDEX FROM " + tableName + ";"
@@ -238,12 +188,20 @@ class DbTableField:  # todo 缺少是否自增
     # 创建语句
     # ADD COLUMN `value5` varchar(255) NOT NULL COMMENT '156415' AFTER `value3`;
     def CREAT_FIELD(self):
-        return "ALTER TABLE `{0}`  ADD COLUMN `{1}` {2} {3} {4} {5} {6};".format(self.tableName, self.fieldName, self.fieldType, self.IsNull(), self.EXTRA, self.COMMENT_INFO, self.getLastField())
+        return "ALTER TABLE `{0}`  ADD COLUMN `{1}` {2} {3}{7} {4} {5} {6} ;".format(self.tableName, self.fieldName, self.fieldType, self.IsNull(), self.EXTRA, self.COMMENT_INFO, self.getLastField(), DbTableField.getDefaultLocText(self))
 
     # 生成更新语句
     # MODIFY COLUMN `value4` int(10) NOT NULL AUTO_INCREMENT COMMENT '123456' AFTER `value1`,
     def generateUpdateSql(self, other):
-        return "ALTER TABLE `{0}` MODIFY COLUMN `{1}` {2} {3} {4} {5} {6};".format(self.tableName, self.fieldName, other.fieldType, other.IsNull(), other.EXTRA, other.COMMENT_INFO, other.getLastField())
+        return "ALTER TABLE `{0}` MODIFY COLUMN `{1}` {2} {3}{7} {4} {5} {6} ;".format(self.tableName, self.fieldName, other.fieldType, other.IsNull(), other.EXTRA, other.COMMENT_INFO, other.getLastField(), DbTableField.getDefaultLocText(other))
+
+    # 生成默认值更新语句
+    def getDefaultLocText(DbTableFieldObj):
+        if DbTableFieldObj.fieldDefault:
+            return " DEFAULT {0}".format(DbTableFieldObj.fieldDefault)
+        else:
+            return ""
+
 
     def Compare(self, other):
         # self.fieldIsPrimaryKey == other.fieldIsPrimaryKey and \ 主键索引等处理
@@ -309,8 +267,7 @@ class DbTableIndex:
             return [self.DROP_INDEX()] + [Other.CREAT_INDEX()]
         return ["ALTER TABLE `{0}` DROP PRIMARY KEY, add primary key({1}) USING {2} ".format(self.Table, Other.generate_column_name(), Other.Index_type)]
 
-@StartCompare
-def start_func(NewTableObjDic, OldTableObjDic):
+def merge_sql(NewTableObjDic, OldTableObjDic):
     delete_table = []
     add_table = []
     update_table = []
@@ -324,7 +281,48 @@ def start_func(NewTableObjDic, OldTableObjDic):
             add_table.append(NewTable.CREAT_TABLE())
     return delete_table + add_table + update_table
 
+def exec_update(cursor,Conn, SqlL):
+    for sql in SqlL:
+        print("开始执行: "+ sql)
+        cursor.execute(sql)
+        Conn.commit()
+        print("执行结束: "+ sql)
 
-start_func()
+def start(UpdateDBInfo):
+    databasesName = UpdateDBInfo["database"]
+    NewDatabaseName = databasesName+"_new"
+    sqlDir = UpdateDBInfo["sqlDir"]
+    isUse = UpdateDBInfo["is_use"]
+    Newconn, Newcursor = start_connect_mysql(UpdateDBInfo["database"], UpdateDBInfo["connectInfo"])
+    sql = "DROP DATABASE IF EXISTS {0};".format(NewDatabaseName)
+    Newcursor.execute(sql)
+    sql = "CREATE DATABASE if not exists {0} DEFAULT CHARACTER SET {1} COLLATE {1}_bin;".format(NewDatabaseName, UpdateDBInfo["connectInfo"]["charset"])
+    Newcursor.execute(sql)
+    Newcursor.execute("use {0};".format(NewDatabaseName))
+    update_new_sql(Newcursor, sqlDir)
+    Oldconn, Oldcursor = start_connect_mysql(databasesName, UpdateDBInfo["connectInfo"])
+    NewTableObjDir = GenerateTabObj(Newcursor)
+    OldTableObjDir = GenerateTabObj(Oldcursor)
+    SqlL = merge_sql(NewTableObjDir, OldTableObjDir)
+    print(SqlL)
+    # exec_sql(Oldconn, Oldcursor, SqlL)
+    write_exec_sql(databasesName, SqlL)
+    if isUse:
+        exec_update(Oldcursor, Oldconn, SqlL)
+    close_connect_mysql(Newconn, Newcursor)
+    close_connect_mysql(Oldconn, Oldcursor)
 
-# test_table()
+
+def main():
+    with open(config_path, 'r') as config_file:
+        config_data = yaml.safe_load(config_file)
+    pass
+    services = config_data['mysql_configs']
+    for service_config in services:
+        start(service_config)
+
+
+if __name__ == "__main__":
+    main()
+
+
